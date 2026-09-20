@@ -85,6 +85,7 @@ theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
 text = "Abre/cierra el menú con Tab"
 
 [node name="Cols" type="HBoxContainer" parent="Menu/MenuPanel/Margin/VBox"]
+visible = false
 
 [node name="Label" type="Label" parent="Menu/MenuPanel/Margin/VBox/Cols"]
 layout_mode = 2
@@ -94,11 +95,12 @@ text = "Columnas"
 
 [node name="ColsSpin" type="SpinBox" parent="Menu/MenuPanel/Margin/VBox/Cols"]
 layout_mode = 2
-min_value = 4.0
+min_value = 3.0
 max_value = 32.0
-value = 16.0
+value = 3.0
 
 [node name="Rows" type="HBoxContainer" parent="Menu/MenuPanel/Margin/VBox"]
+visible = false
 
 [node name="Label" type="Label" parent="Menu/MenuPanel/Margin/VBox/Rows"]
 layout_mode = 2
@@ -108,9 +110,9 @@ text = "Filas"
 
 [node name="RowsSpin" type="SpinBox" parent="Menu/MenuPanel/Margin/VBox/Rows"]
 layout_mode = 2
-min_value = 4.0
+min_value = 3.0
 max_value = 18.0
-value = 9.0
+value = 3.0
 
 [node name="Time" type="HBoxContainer" parent="Menu/MenuPanel/Margin/VBox"]
 

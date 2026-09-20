@@ -8,20 +8,18 @@ extends Node2D
 
 const PLAYER_SCENE: PackedScene = preload("res://scenes/player.tscn")
 
-## Píxeles que se mueve un jugador por cada comando recibido.
-const STEP: float = 60.0
+## Grilla de zonas. Los espectadores escriben el número de la zona
+## (1..N), con o sin prefijo "!", para mover a su jugador hasta su centro.
+## El tamaño lo fija el minijuego (crece cada 2 rondas) y los números
+## están barajados para que haya que leer cuál va a cada casilla.
+var _grid_cols: int = 3
+var _grid_rows: int = 3
 
-## Intervalo entre ticks del juego (en segundos).
-## Durante cada tick se acumulan los movimientos de chat
-## y al liberarlo se aplican todos en orden.
-const TICK_INTERVAL: float = 3.0
+## Número mostrado en cada celda: _cell_to_number[celda] = etiqueta 1..N.
+var _cell_to_number: Array[int] = []
 
 const CMD_PLAY := "!play"
 const CMD_STOP := ["!stop", "!salir"]
-const CMD_UP := ["!up", "!arriba"]
-const CMD_DOWN := ["!down", "!abajo"]
-const CMD_LEFT := ["!left", "!izq", "!izquierda"]
-const CMD_RIGHT := ["!right", "!der", "!derecha"]
 const CMD_SIT := ["!sit", "!sentar"]
 const CMD_EMOTE := ["!emote", "!bailar"]
 
@@ -31,28 +29,23 @@ const CMD_EMOTE := ["!emote", "!bailar"]
 
 var _players_by_user: Dictionary = {}
 
-## Cuenta regresiva hasta el próximo tick del juego.
-var _tick_time: float = TICK_INTERVAL
-
-## Movimientos de chat acumulados durante el tick actual.
-## user_key -> Array de offsets (Vector2) a aplicar en el próximo tick.
-var _pending_moves: Dictionary = {}
-
 
 func _ready() -> void:
 	_enable_window_transparency()
 	_listener.chat_message.connect(_on_chat_message)
 	_minigame.setup(self, _players)
 	_minigame.player_eliminated.connect(_on_player_eliminated)
+	_minigame.grid_changed.connect(_on_grid_changed)
+	_reshuffle_numbers()
 	print("Overlay listo. Escribe !play en el chat para crear un jugador.")
 
 
-func _process(delta: float) -> void:
-	_tick_time -= delta
-
-	if _tick_time <= 0.0:
-		_release_tick()
-		_tick_time += TICK_INTERVAL
+func _on_grid_changed(cols: int, rows: int) -> void:
+	_grid_cols = cols
+	_grid_rows = rows
+	## Se baraja en cada ronda para que los chaters tengan que releer los números.
+	_reshuffle_numbers()
+	queue_redraw()
 
 
 func get_players() -> Array:
@@ -63,7 +56,6 @@ func _on_player_eliminated(player: Node) -> void:
 	for key in _players_by_user.keys():
 		if _players_by_user[key] == player:
 			_players_by_user.erase(key)
-			_pending_moves.erase(key)
 			break
 
 	if player.has_method("die"):
@@ -109,10 +101,10 @@ func _on_chat_message(
 		player.emote()
 		return
 
-	var direction: Vector2 = _command_direction(command)
+	var zone: int = _parse_zone(command)
 
-	if direction != Vector2.ZERO:
-		_queue_move(user_key, direction)
+	if zone > 0:
+		player.queue_targets([_zone_center(zone, get_viewport_rect().size)])
 		return
 
 	if content.begins_with("!"):
@@ -121,39 +113,121 @@ func _on_chat_message(
 	player.show_message(content)
 
 
-func _command_direction(command: String) -> Vector2:
-	if command in CMD_UP:
-		return Vector2.UP
-	if command in CMD_DOWN:
-		return Vector2.DOWN
-	if command in CMD_LEFT:
-		return Vector2.LEFT
-	if command in CMD_RIGHT:
-		return Vector2.RIGHT
-	return Vector2.ZERO
+## Convierte un comando de chat en un número de zona (1..N).
+## Acepta "5" o "!5". Devuelve 0 si no es un número válido.
+func _parse_zone(command: String) -> int:
+	var trimmed: String = command.trim_prefix("!").strip_edges()
+
+	if not trimmed.is_valid_int():
+		return 0
+
+	var value: int = trimmed.to_int()
+	var total_cells: int = _grid_cols * _grid_rows
+
+	if value < 1 or value > total_cells:
+		return 0
+
+	return value
 
 
-func _queue_move(user_key: String, direction: Vector2) -> void:
-	var steps: Array = _pending_moves.get(user_key, [])
-	steps.append(direction * STEP)
-	_pending_moves[user_key] = steps
+## Genera una permutación aleatoria de los números 1..N para las casillas.
+func _reshuffle_numbers() -> void:
+	var total: int = _grid_cols * _grid_rows
+	_cell_to_number.clear()
+
+	for i in range(1, total + 1):
+		_cell_to_number.append(i)
+
+	_cell_to_number.shuffle()
 
 
-func _release_tick() -> void:
-	for user_key in _pending_moves.keys():
-		var steps: Array = _pending_moves[user_key]
+## Centro absoluto (en coordenadas de pantalla) de la celda que muestra
+## el número dado. Devuelve Vector2.ZERO si no se encuentra.
+func _zone_center(number: int, view_size: Vector2) -> Vector2:
+	var cell: int = _cell_to_number.find(number)
 
-		if steps.is_empty():
-			continue
+	if cell < 0:
+		return Vector2.ZERO
 
-		var player: Player = _players_by_user.get(user_key, null) as Player
+	var col: int = cell % _grid_cols
+	var row: int = cell / _grid_cols
+	var cell_size: Vector2 = Vector2(
+		view_size.x / float(_grid_cols),
+		view_size.y / float(_grid_rows)
+	)
+	return Vector2(
+		cell_size.x * (col + 0.5),
+		cell_size.y * (row + 0.5)
+	)
 
-		if player == null:
-			continue
 
-		player.queue_steps(steps)
+## Dibuja la grilla con los números de las zonas para guiar al chat.
+## El tamaño lo sincroniza el minijuego con grid_changed.
+func _draw() -> void:
+	var view_size: Vector2 = get_viewport_rect().size
+	var cell_size: Vector2 = Vector2(
+		view_size.x / float(_grid_cols),
+		view_size.y / float(_grid_rows)
+	)
+	var line_color := Color(1.0, 1.0, 1.0, 0.2)
+	var text_color := Color(1.0, 1.0, 1.0, 0.95)
+	var outline_color := Color(0.0, 0.0, 0.0, 0.95)
+	var font: Font = ThemeDB.fallback_font
+	var font_size: int = clampi(
+		int(minf(cell_size.x, cell_size.y) / 6.0),
+		24,
+		80
+	)
+	var outline_size: int = maxi(font_size / 12, 3)
 
-	_pending_moves.clear()
+	for col in range(_grid_cols + 1):
+		var x: float = col * cell_size.x
+		draw_line(Vector2(x, 0.0), Vector2(x, view_size.y), line_color, 2.0)
+
+	for row in range(_grid_rows + 1):
+		var y: float = row * cell_size.y
+		draw_line(Vector2(0.0, y), Vector2(view_size.x, y), line_color, 2.0)
+
+	for cell in _cell_to_number.size():
+		var col: int = cell % _grid_cols
+		var row: int = cell / _grid_cols
+		var center := Vector2(
+			cell_size.x * (col + 0.5),
+			cell_size.y * (row + 0.5)
+		)
+		var label: String = str(_cell_to_number[cell])
+		var size: Vector2 = font.get_string_size(
+			label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			font_size
+		)
+		var pos: Vector2 = center - size * 0.5
+		font.draw_string_outline(
+			get_canvas_item(),
+			pos,
+			label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			font_size,
+			outline_size,
+			outline_color,
+			3,
+			TextServer.DIRECTION_AUTO,
+			TextServer.ORIENTATION_HORIZONTAL
+		)
+		font.draw_string(
+			get_canvas_item(),
+			pos,
+			label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			font_size,
+			text_color,
+			3,
+			TextServer.DIRECTION_AUTO,
+			TextServer.ORIENTATION_HORIZONTAL
+		)
 
 
 func _spawn_player(user_key: String, username: String) -> void:
@@ -186,5 +260,4 @@ func _remove_player(user_key: String) -> void:
 
 	player.queue_free()
 	_players_by_user.erase(user_key)
-	_pending_moves.erase(user_key)
 	print("[JUEGO] Jugador eliminado.")

@@ -3,7 +3,8 @@ class_name Player
 ## Player
 ## ------------------
 ## Personaje controlado por comandos de chat. Se crea con !play,
-## se mueve con las flechas del chat y alterna entre idle, run, sit y emote.
+## se mueve al centro de cada zona (escribiendo su número) y alterna
+## entre idle, run, sit y emote.
 
 
 const TEX_IDLE: Texture2D = preload("res://sprites/idle.png")
@@ -25,6 +26,10 @@ const EMOTE_FRAMES: int = 3
 const SPRITE_SCALE: float = 3.0
 const ANIM_FPS: float = 12.0
 const MOVE_DURATION: float = 0.3
+## Velocidad de caminata usada para escalar el tiempo de viaje a un destino
+## lejano (como cruzar toda la pantalla), manteniendo un ritmo de "caminar".
+const MOVE_SPEED: float = 1200.0
+const MOVE_MAX_DURATION: float = 1.5
 const DEATH_DURATION: float = 0.4
 
 ## Burbuja con el mensaje de chat del jugador.
@@ -70,9 +75,9 @@ var _frame: int = -1
 var _tween: Tween
 var _message_time_left: float = 0.0
 
-## Pasos de movimiento pendientes (offsets Vector2) acumulados
-## durante el tick del juego. Se aplican en orden, uno tras otro.
-var _step_queue: Array[Vector2] = []
+## Destinos de movimiento pendientes (centros de zona, Vector2 absolutos)
+## recibidos del chat. Se visitan en orden, uno tras otro.
+var _target_queue: Array[Vector2] = []
 
 
 func setup(p_username: String) -> void:
@@ -132,35 +137,38 @@ func die() -> void:
 	tween.finished.connect(queue_free)
 
 
-## Encola los pasos acumulados en un tick del juego.
-## Los pasos se aplican en orden: cada uno inicia su animación
-## al terminar el anterior.
-func queue_steps(steps: Array) -> void:
-	if steps.is_empty():
+## Encola los destinos recibidos del chat.
+## Cada destino (centro de zona) se recorre en orden: el siguiente
+## inicia su animación al terminar el anterior.
+func queue_targets(targets: Array) -> void:
+	if targets.is_empty():
 		return
 
-	for step in steps:
-		if step is Vector2:
-			_step_queue.append(step)
+	for target in targets:
+		if target is Vector2:
+			_target_queue.append(target)
 
 	if _tween == null or not _tween.is_running():
 		_advance_next_step()
 
 
-func move_by(offset: Vector2) -> void:
-	_row = _direction_row(offset)
-
-	var target: Vector2 = position + offset
+func move_to(target: Vector2) -> void:
 	var view_size: Vector2 = get_viewport_rect().size
 	var half: Vector2 = _visual_half_size()
 	target.x = clampf(target.x, half.x, maxf(half.x, view_size.x - half.x))
 	target.y = clampf(target.y, half.y, maxf(half.y, view_size.y - half.y))
 
+	_row = _direction_row(target - position)
 	_stop_moving()
 	_set_anim(Anim.RUN)
 
+	var duration: float = clampf(
+		position.distance_to(target) / MOVE_SPEED,
+		MOVE_DURATION,
+		MOVE_MAX_DURATION
+	)
 	_tween = create_tween()
-	_tween.tween_property(self, "position", target, MOVE_DURATION)
+	_tween.tween_property(self, "position", target, duration)
 	_tween.finished.connect(_on_move_finished)
 
 
@@ -250,16 +258,16 @@ func _on_move_finished() -> void:
 
 
 func _advance_next_step() -> void:
-	if _step_queue.is_empty():
+	if _target_queue.is_empty():
 		_set_anim(Anim.IDLE)
 		return
 
-	var step: Vector2 = _step_queue.pop_front()
-	move_by(step)
+	var target: Vector2 = _target_queue.pop_front()
+	move_to(target)
 
 
 func _clear_steps() -> void:
-	_step_queue.clear()
+	_target_queue.clear()
 
 
 func _set_anim(anim: Anim) -> void:
